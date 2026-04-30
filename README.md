@@ -22,6 +22,63 @@ pip install ultralytics
 
 sudo apt-get install libyaml-dev
 
-python setup.py build develop
+pip install natsort
+pip install cython-bbox
 ```
 
+Then go to `setup.py` and replace lines 176-182
+
+```python
+def is_installed(package_name):
+    #from pip._internal.utils.misc import get_installed_distributions
+    import pkg_resources
+    for p in pkg_resources.working_set:
+        if package_name in p.egg_name():
+            return True
+    return False
+```
+
+with
+
+```python
+def is_installed(package_name):
+    from importlib.util import find_spec
+    return find_spec(package_name) is not None
+```
+
+finally
+
+```bash
+pip install . --no-build-isolation
+python setup.py build_ext --inplace
+```
+
+in `alphapose/utils` create the file `safe_import.py`
+
+```python
+def import_tkinter():
+    try:
+        from tkinter import _flatten
+    except ImportError:
+        def _flatten(seq):
+            def _inner(seq):
+                for item in seq:
+                    if isinstance(item, (list, tuple)):
+                        yield from _inner(item)
+                    else:
+                        yield item
+            return tuple(_inner(seq))
+```
+
+Then in the files `halpe_26`, `halpe_68`, `halpe_136`, `halpe_coco_wholebody_26`, `halpe_coco_wholebody_136`, `single_hand` and `coco_wholebody` in the `alphapose/dataset/` folder replace
+
+```python
+from tkinter import _flatten
+```
+
+with
+
+```python
+from alphapose.utils.safe_import import import_tkinter
+import_tkinter()
+```
