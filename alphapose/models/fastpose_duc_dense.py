@@ -51,14 +51,14 @@ class FastPose_DUC_Dense(nn.Module):
         import torchvision.models as tm
         if cfg['NUM_LAYERS'] == 152:
             ''' Load pretrained model '''
-            x = tm.resnet152(pretrained=True)
+            x = tm.resnet152(weights = tm.ResNet152_Weights.DEFAULT)
         elif cfg['NUM_LAYERS'] == 101:
             ''' Load pretrained model '''
-            x = tm.resnet101(pretrained=True)
+            x = tm.resnet101(weights = tm.ResNet101_Weights.DEFAULT)
         elif cfg['NUM_LAYERS'] == 50:
-            x = tm.resnet50(pretrained=True)
+            x = tm.resnet50(weights = tm.ResNet50_Weights.DEFAULT)
         elif cfg['NUM_LAYERS'] == 18:
-            x = tm.resnet18(pretrained=True)
+            x = tm.resnet18(weights = tm.ResNet18_Weights.DEFAULT)
         else:
             raise NotImplementedError
         model_state = self.preact.state_dict()
