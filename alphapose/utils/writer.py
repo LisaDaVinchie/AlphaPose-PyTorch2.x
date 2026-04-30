@@ -78,20 +78,29 @@ class DataWriter():
         return self
 
     def update(self):
+        print("Init update")
         final_result = []
         norm_type = self.cfg.LOSS.get('NORM_TYPE', None)
         hm_size = self.cfg.DATA_PRESET.HEATMAP_SIZE
         if self.save_video:
+            print("Saving video")
+             # Force software encoder to avoid hardware codec issues
+            self.video_save_opt['fourcc'] = cv2.VideoWriter_fourcc(*'mp4v')
+            if not self.video_save_opt['savepath'].endswith('.mp4'):
+                self.video_save_opt['savepath'] = self.video_save_opt['savepath'].rsplit('.', 1)[0] + '.mp4'
             # initialize the file video stream, adapt ouput video resolution to original video
             stream = cv2.VideoWriter(*[self.video_save_opt[k] for k in ['savepath', 'fourcc', 'fps', 'frameSize']])
-            if not stream.isOpened():
-                print("Try to use other video encoders...")
-                ext = self.video_save_opt['savepath'].split('.')[-1]
-                fourcc, _ext = self.recognize_video_ext(ext)
-                self.video_save_opt['fourcc'] = fourcc
-                self.video_save_opt['savepath'] = self.video_save_opt['savepath'][:-4] + _ext
-                stream = cv2.VideoWriter(*[self.video_save_opt[k] for k in ['savepath', 'fourcc', 'fps', 'frameSize']])
             assert stream.isOpened(), 'Cannot open video for writing'
+
+            # print("init stream")
+            # if not stream.isOpened():
+            #     print("Try to use other video encoders...")
+            #     ext = self.video_save_opt['savepath'].split('.')[-1]
+            #     fourcc, _ext = self.recognize_video_ext(ext)
+            #     self.video_save_opt['fourcc'] = fourcc
+            #     self.video_save_opt['savepath'] = self.video_save_opt['savepath'][:-4] + _ext
+            #     stream = cv2.VideoWriter(*[self.video_save_opt[k] for k in ['savepath', 'fourcc', 'fps', 'frameSize']])
+            # assert stream.isOpened(), 'Cannot open video for writing'
         # keep looping infinitelyd
         while True:
             # ensure the queue is not empty and get item
