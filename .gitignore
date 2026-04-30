@@ -119,3 +119,4 @@ data/
 exp/
 data
 *venv*
+detector/nms/src/
