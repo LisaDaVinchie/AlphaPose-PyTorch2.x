@@ -121,3 +121,4 @@ data
 *venv*
 detector/nms/src/
 *.pt
+*.mp4
