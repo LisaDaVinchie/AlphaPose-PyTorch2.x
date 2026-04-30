@@ -120,3 +120,4 @@ exp/
 data
 *venv*
 detector/nms/src/
+*.pt
