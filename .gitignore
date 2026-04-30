@@ -122,3 +122,4 @@ data
 detector/nms/src/
 *.pt
 *.mp4
+alphapose-results.json
