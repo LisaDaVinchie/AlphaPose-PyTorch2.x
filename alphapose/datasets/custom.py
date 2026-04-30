@@ -7,7 +7,7 @@
 import copy
 import os
 import pickle as pk
-from abc import abstractmethod, abstractproperty
+from abc import abstractmethod
 
 import torch.utils.data as data
 from pycocotools.coco import COCO
@@ -156,15 +156,18 @@ class CustomDataset(data.Dataset):
     def _load_jsons(self):
         pass
 
-    @abstractproperty
+    @property
+    @abstractmethod  
     def CLASSES(self):
         return None
 
-    @abstractproperty
+    @property
+    @abstractmethod  
     def num_joints(self):
         return None
 
-    @abstractproperty
+    @property
+    @abstractmethod  
     def joint_pairs(self):
         """Joint pairs which defines the pairs of joint to be swapped
         when the image is flipped horizontally."""
