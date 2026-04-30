@@ -7,7 +7,9 @@
 import os
 
 import numpy as np
-from tkinter import _flatten
+# from tkinter import _flatten
+from alphapose.utils.safe_import import import_tkinter
+import_tkinter()
 from pycocotools.coco import COCO
 
 from alphapose.models.builder import DATASET
