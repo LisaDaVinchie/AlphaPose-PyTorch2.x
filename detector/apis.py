@@ -20,6 +20,15 @@ def get_detector(opt=None):
         cfg.MODEL_NAME = opt.detector.lower()
         cfg.MODEL_WEIGHTS = f'detector/yolox/data/{opt.detector.lower().replace("-", "_")}.pth'
         return YOLOXDetector(cfg, opt)
+    elif opt.detector == 'yolo26':
+        from detector.yolo26_api import YOLO26Detector
+        from easydict import EasyDict
+        det_cfg = EasyDict({
+            'CONFIG': 'yolo26n.pt',   # or yolo26s.pt for more accuracy
+            'CONFIDENCE': 0.4,
+            'NMS_THRESH': 0.5,
+        })
+        return YOLO26Detector(det_cfg, opt)
     elif opt.detector == 'tracker':
         from detector.tracker_api import Tracker
         from detector.tracker_cfg import cfg
