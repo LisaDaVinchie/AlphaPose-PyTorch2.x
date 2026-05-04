@@ -3,12 +3,11 @@ from collections import defaultdict
 from pathlib import Path
 
 class VisualizeResults:
-    def __init__(self, thumbnails_dir: Path = None, font_size = 20):
+    def __init__(self, font_size = 20):
         """Initialise the class to show the predicted classes.
 
         Args:
-            thumbnails_dir (Path): path to the directory containing the images to use as thumbnails.
-            Use None to not print thumbnails. Defaults to None.
+            font_size (int): size of the font. Dfaults to 20.
         """
         self.colors = [
             "#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4",
@@ -19,8 +18,6 @@ class VisualizeResults:
             self.font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
         except Exception:
             self.font = ImageFont.load_default()
-
-        self.class_to_img = self.get_thumbnail_images(thumbnails_dir) if thumbnails_dir is not None else None
 
     def get_thumbnail_images(self, thumbnails_dir: Path) -> dict:
         """Get a list of paths of thumbnail images.
@@ -81,14 +78,6 @@ class VisualizeResults:
             
             # Draw the bounding box with the most probable label
             self.draw_bbox_w_label(draw, box, names, scores)
-            
-            if self.class_to_img is not None:
-                for name, score in zip(names, scores):
-                    image, (new_h, new_w) = self.add_predicted_classes_thumbnails(image, draw, offset, name, score)
-                    offset[1] += new_h + img_spacing[1]
-                
-                offset[1] = base_offset[1]
-                offset[0] += base_offset[0] + img_spacing[0] + new_w
 
         if save_path is not None:
             if isinstance(save_path, str):
@@ -125,47 +114,3 @@ class VisualizeResults:
                     fill="white", font=self.font,
                     stroke_width=2,
                     stroke_fill="black")
-
-    def add_predicted_classes_thumbnails(self, image: Image, draw, offset: tuple, name: str, score: float):
-
-        if name not in list(self.class_to_img.keys()):
-            print(f"No image found for class {name}")
-            return image, (0, 0)
-
-        mini_image_path = self.class_to_img[name]
-
-        mini_image = Image.open(mini_image_path)
-
-        image, (new_h, new_w), (mini_x, mini_y) = self.draw_thumbnail(image, mini_image, offset=offset, prop=1/7, pos="tr")
-
-        label = f"{score:.2f} {name}"
-
-        draw.text((mini_x, mini_y - 30), label,
-                                fill="white", font=self.font,
-                                stroke_width=2,
-                                stroke_fill="black")
-                    
-        return image, (new_h, new_w)
-
-    def draw_thumbnail(self, image: Image, mini_image: Image, offset: tuple = (20, 20), prop:int = 1/10, pos = "tl") -> Image:
-
-        w, h = image.width, image.height
-        mini_w, mini_h = mini_image.width, mini_image.height
-
-        # Resize with to match original image fraction and height to keep proportions
-        new_w = int(w * prop)
-        new_h = int(new_w * mini_h / mini_w)
-
-        new_image = mini_image.resize((new_w, new_h))
-
-        possible_positions = ["tr", "tl", "br", "bl"]
-        if pos not in possible_positions:
-            pos = "tr"
-
-        # Paste mini image in the chosen corner
-        mini_x = w - (new_w + offset[0]) if pos in ["tr", "br"] else offset[0]
-        mini_y = h - (new_h + offset[1]) if pos in ["bl", "br"] else offset[1]
-        
-        image.paste(new_image, (mini_x, mini_y))
-
-        return image, (new_h, new_w), (mini_x, mini_y)
