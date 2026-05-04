@@ -68,7 +68,14 @@ class VideoInference():
         )
         boxes = results[0].boxes.xyxy.cpu().numpy() if results[0].boxes is not None and len(results[0].boxes) > 0 else None
         if boxes is None:
-            return frame
+            result = {
+                "image": frame,
+                "boxes": [],
+                "yolo_conf": [],
+                "keypoints": [],
+                "pose_conf": []
+            }
+            return result
         
         scores = results[0].boxes.conf.cpu().numpy()
 
@@ -85,20 +92,25 @@ class VideoInference():
         with torch.no_grad():
             heatmap = self.pose_model(images.to(self.device)).cpu().numpy()   # (B, 17, hm_h, hm_w)
         
+        keypoints = []
+        pose_conf = []
         for i in range(heatmap.shape[0]):
             preds, maxvals = t.heatmap_to_coord_simple(
                     hms=heatmap[i],
                     bbox = bboxes_resized[i]
                 )
-            
+            keypoints.append(preds)
+            pose_conf.append(maxvals)
 
-            x1, y1, x2, y2 = map(int, boxes[i].tolist())
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 255), 2)
-            cv2.putText(frame, f'{scores[i]:.2f}', (x1, y1 - 6),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
-            frame = self.draw_joints(frame, preds, maxvals)
+        result = {
+            "image": frame,
+            "boxes": boxes,
+            "yolo_conf": scores,
+            "keypoints": keypoints,
+            "pose_conf": pose_conf
+        }
 
-        return frame
+        return result
 
     def build_pose_model(self, cfg_path, checkpoint_path):
         cfg = update_config(cfg_path)
@@ -167,6 +179,17 @@ class VideoInference():
                 cv2.line(img, (x1, y1), (x2, y2), color, 2)
 
         return img
+    
+    def draw_result(self, frame, result):
+        if len(result['boxes']) <= 0:
+            return frame
+        for box, yolo_conf, keypoints, pose_conf in zip(result['boxes'], result['yolo_conf'], result['keypoints'], result['pose_conf']):
+            x1, y1, x2, y2 = map(int, box.tolist())
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 255), 2)
+            cv2.putText(frame, f'{yolo_conf:.2f}', (x1, y1 - 6),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
+            frame = self.draw_joints(frame, keypoints, pose_conf)
+        return frame
 
 def main(args):
 
@@ -185,7 +208,10 @@ def main(args):
             ('.jpg', '.jpeg', '.png', '.bmp', '.webp')):
         frame = cv2.imread(source)
         result = pose.process_frame(frame)
-        cv2.imshow('Pose', result)
+
+        frame = pose.draw_result(frame, result)
+
+        cv2.imshow('Pose', frame)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
         return
@@ -202,8 +228,10 @@ def main(args):
             break
         start_time = perf_counter()
         result = pose.process_frame(frame)
+        frame = pose.draw_result(frame, result)
+            
         elapsed_times.append(perf_counter() - start_time)
-        cv2.imshow('Pose', result)
+        cv2.imshow('Pose', frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
     
