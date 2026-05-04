@@ -13,15 +13,43 @@ from ultralytics import YOLO
 from alphapose.models import builder
 from alphapose.utils.config import update_config
 from alphapose.utils.presets import SimpleTransform
+from alphapose.utils.transforms import get_affine_transform, affine_transform, get_max_pred
+import alphapose.utils.transforms as t
+from alphapose.datasets.mscoco import Mscoco
+
+class DummyDataset:
+    def __init__(self):
+        self.joint_pairs = [
+            (1,2),(3,4),(5,6),(7,8),
+            (9,10),(11,12),(13,14),(15,16)
+        ]
+        self.num_joints = 17
+
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-COCO_SKELETON = [
-    (0, 1), (0, 2), (1, 3), (2, 4),
-    (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
-    (5, 11), (6, 12), (11, 12),
-    (11, 13), (13, 15), (12, 14), (14, 16),
+COCO_PAIRS = [
+    (0,1), (0, 2), (1, 2), (1, 3), (2, 4), # Head
+    (5, 6), (5, 11), (6, 12), (11, 12), # Torso
+    (5, 7), (5, 9), (6, 8), (8, 10), # Arms
+    (11, 13), (13, 15), (12, 14), (14, 16) # Legs
+
 ]
+
+HEAD = [0, 1, 2, 3, 4, (0,1), (0, 2), (1, 2), (1, 3), (2, 4)]
+
+TORSO = [5, 6, 11, 12, (5, 6), (5, 11), (6, 12), (11, 12)]
+
+ARMS = [7, 8, 9, 10, (5, 7), (5, 9), (6, 8), (8, 10)]
+
+LEGS = [13, 14, 15, 16, (11, 13), (13, 15), (12, 14), (14, 16)]
+
+COLORS = {
+    "head":  (0, 255, 255),  # yellow
+    "torso": (255, 0, 255),  # magenta
+    "arms":  (0, 255, 0),    # green
+    "legs":  (255, 0, 0)     # blue
+}
 
 MEAN = [0.485, 0.456, 0.406]
 STD  = [0.229, 0.224, 0.225]
@@ -36,55 +64,82 @@ def build_pose_model(cfg_path, checkpoint_path):
     return model, cfg
 
 
-def preprocess_crop(crop, input_size=(192, 256)):
-    """Resize crop to model input size, normalize, return tensor."""
-    w, h = input_size  # 192 x 256
-    resized = cv2.resize(crop, (w, h))
-    rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-    rgb = (rgb - MEAN) / STD
-    tensor = torch.from_numpy(rgb.transpose(2, 0, 1)).float().unsqueeze(0)
-    return tensor.to(DEVICE)
+def heatmap_to_joints(heatmap, center, scale, INPUT_W, INPUT_H):
+    hm = heatmap[0].cpu().numpy()       # (17, HM_H, HM_W)
+    HM_H, HM_W = hm.shape[-2], hm.shape[-1]
 
+    preds, maxvals = get_max_pred(hm)   # coords in heatmap space (0–48, 0–64)
 
-def heatmap_to_coords(heatmap, box_x1, box_y1, box_w, box_h):
+    # scale heatmap coords up to input space (x4) BEFORE applying inverse transform
+    preds[:, 0] = (preds[:, 0] / HM_W) * INPUT_W
+    preds[:, 1] = (preds[:, 1] / HM_H) * INPUT_H
+
+    # inverse transform uses INPUT size, matching preprocess_affine exactly
+    trans_inv = get_affine_transform(center, scale, 0, [INPUT_W, INPUT_H], inv=1)
+    coords = np.array([
+        affine_transform(preds[j], trans_inv)
+        for j in range(hm.shape[0])
+    ], dtype=np.float32)
+
+    return coords, maxvals[:, 0]
+
+def draw_joints(img, keypoints, kp_score=None, thresh=0.3, skeleton = True):
     """
-    Convert AlphaPose heatmap output to image-space keypoint coords.
-    heatmap: (1, num_joints, hm_h, hm_w) tensor
-    Returns: (num_joints, 2) numpy array of (x, y) coords in original image space
-             (num_joints,)   numpy array of confidence scores
+    keypoints: (K, 2)
+    kp_score: (K,) optional confidence
     """
-    hm = heatmap[0].cpu().numpy()          # (num_joints, hm_h, hm_w)
-    num_joints, hm_h, hm_w = hm.shape
 
-    coords = np.zeros((num_joints, 2), dtype=np.float32)
-    scores = np.zeros(num_joints, dtype=np.float32)
+    img = img.copy()
+    K = keypoints.shape[0]
 
-    for j in range(num_joints):
-        flat_idx = np.argmax(hm[j])
-        py = flat_idx // hm_w
-        px = flat_idx % hm_w
-        scores[j] = hm[j, py, px]
+    for i in range(K):
+        x, y = keypoints[i]
 
-        # map from heatmap space -> crop space -> image space
-        x = (px + 0.5) / hm_w * box_w + box_x1
-        y = (py + 0.5) / hm_h * box_h + box_y1
-        coords[j] = [x, y]
+        # skip low confidence points
+        if kp_score is not None and kp_score[i] < thresh:
+            continue
 
-    return coords, scores
+        x, y = int(x), int(y)
 
+        color = (0, 0, 0)
 
-def draw_pose(frame, coords, scores, conf_thresh=0.3):
-    for a, b in COCO_SKELETON:
-        if scores[a] > conf_thresh and scores[b] > conf_thresh:
-            x1, y1 = int(coords[a][0]), int(coords[a][1])
-            x2, y2 = int(coords[b][0]), int(coords[b][1])
-            cv2.line(frame, (x1, y1), (x2, y2), (255, 128, 0), 2)
+        if i in HEAD:
+            color = COLORS['head']
+        elif i in ARMS:
+            color = COLORS['arms']
+        elif i in TORSO:
+            color = COLORS['torso']
+        elif i in LEGS:
+            color = COLORS['legs']
+        else:
+            color = (0, 0, 0)
 
-    for j in range(len(coords)):
-        if scores[j] > conf_thresh:
-            cx, cy = int(coords[j][0]), int(coords[j][1])
-            cv2.circle(frame, (cx, cy), 4, (0, 255, 0), -1)
+        cv2.circle(
+            img,
+            (x, y),
+            radius=3,
+            color=color,
+            thickness=-1
+        )
+    
+    if skeleton:
+        for (a, b) in COCO_PAIRS:
+            if (a, b) in HEAD:
+                color = COLORS['head']
+            elif (a, b) in ARMS:
+                color = COLORS['arms']
+            elif (a, b) in TORSO:
+                color = COLORS['torso']
+            elif (a, b) in LEGS:
+                color = COLORS['legs']
+            else:
+                color = (0, 0, 0)
 
+            x1, y1 = map(int, keypoints[a])
+            x2, y2 = map(int, keypoints[b])
+            cv2.line(img, (x1, y1), (x2, y2), color, 2)
+
+    return img
 
 def process_frame(frame, detector, pose_model, det_conf=0.4):
     results = detector.predict(frame, classes=[0], conf=det_conf, verbose=False)
@@ -93,37 +148,66 @@ def process_frame(frame, detector, pose_model, det_conf=0.4):
     if boxes is None or len(boxes) == 0:
         return frame
 
+    dataset = DummyDataset()
+
     for box in boxes:
         x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
         conf = float(box.conf[0])
-
-        # clamp to frame bounds
-        x1 = max(0, x1); y1 = max(0, y1)
-        x2 = min(frame.shape[1], x2); y2 = min(frame.shape[0], y2)
 
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 255), 2)
         cv2.putText(frame, f'{conf:.2f}', (x1, y1 - 6),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
 
-        crop = frame[y1:y2, x1:x2]
-        if crop.size == 0:
-            continue
+        transformation = SimpleTransform(
+            dataset=dataset,
+            scale_factor=0,
+            input_size=(256, 192),
+            output_size=(64, 48),
+            rot=0,
+            sigma=2,
+            train=False,
+            add_dpg=False
+        )
 
-        inp = preprocess_crop(crop)
+        img, bbox = transformation.test_transform(frame, [x1, y1, x2, y2])
 
         with torch.no_grad():
-            heatmap = pose_model(inp)   # (1, 17, hm_h, hm_w)
+            heatmap = pose_model(img.unsqueeze(0).to(DEVICE))   # (1, 17, hm_h, hm_w)
 
-        coords, scores = heatmap_to_coords(
-            heatmap, x1, y1, x2 - x1, y2 - y1
+        preds, maxvals = t.heatmap_to_coord_simple(
+            hms=heatmap[0].cpu().numpy(),
+            bbox = bbox
         )
-        draw_pose(frame, coords, scores)
+        
+        frame = draw_joints(frame, preds, maxvals)
 
     return frame
 
+def draw_pose(img, keypoints, kp_score=None, thresh=0.3):
+    img = img.copy()
+
+    # draw joints
+    for i, (x, y) in enumerate(keypoints):
+        if kp_score is not None and kp_score[i] < thresh:
+            continue
+
+        cv2.circle(img, (int(x), int(y)), 3, (0, 255, 0), -1)
+
+    # draw skeleton
+    for a, b in COCO_PAIRS:
+        if kp_score is not None:
+            if kp_score[a] < thresh or kp_score[b] < thresh:
+                continue
+
+        x1, y1 = map(int, keypoints[a])
+        x2, y2 = map(int, keypoints[b])
+
+        cv2.line(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
+
+    return img
 
 def run(args):
-    detector  = YOLO('yolo26s.pt')
+    detector  = YOLO('yolo26x.pt')
     pose_model, cfg = build_pose_model(args.cfg, args.checkpoint)
 
     source = args.source
