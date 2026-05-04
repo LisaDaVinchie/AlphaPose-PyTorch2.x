@@ -11,18 +11,15 @@ from alphapose.utils.transforms import get_affine_transform, affine_transform, g
 import alphapose.utils.transforms as t
 from time import perf_counter
 
-
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-
 COCO_PAIRS = [
-    (0,1), (0, 2), (1, 2), (1, 3), (2, 4), # Head
+    (0, 1), (0, 2), (1, 2), (1, 3), (2, 4), # Head
     (5, 6), (5, 11), (6, 12), (11, 12), # Torso
     (5, 7), (5, 9), (6, 8), (8, 10), # Arms
     (11, 13), (13, 15), (12, 14), (14, 16) # Legs
 
 ]
 
-HEAD = [0, 1, 2, 3, 4, (0,1), (0, 2), (1, 2), (1, 3), (2, 4)]
+HEAD = [0, 1, 2, 3, 4, (0, 1), (0, 2), (1, 2), (1, 3), (2, 4)]
 
 TORSO = [5, 6, 11, 12, (5, 6), (5, 11), (6, 12), (11, 12)]
 
@@ -44,9 +41,9 @@ class VideoInference():
             pose_model_cfg = './configs/coco/resnet/256x192_res50_lr1e-3_1x.yaml',
             pose_model_weights = './model_files/fast_res50_256x192.pth'
         ):
-        self.dataset = DummyDataset()
+        dataset = DummyDataset()
         self.transformation = SimpleTransform(
-                dataset=self.dataset,
+                dataset=dataset,
                 scale_factor=0,
                 input_size=(256, 192),
                 output_size=(64, 48),
@@ -55,12 +52,20 @@ class VideoInference():
                 train=False,
                 add_dpg=False
             )
+
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         
         self.detector  = YOLO(detector_weights)
         self.pose_model, cfg = self.build_pose_model(pose_model_cfg, pose_model_weights)
 
     def process_frame(self, frame, det_conf=0.4):
-        results = self.detector.predict(frame, classes=[0], conf=det_conf, verbose=False)
+        results = self.detector.predict(
+            frame,
+            classes=[0],
+            conf=det_conf,
+            device=self.device,
+            verbose=False
+        )
         boxes = results[0].boxes
 
         if boxes is None or len(boxes) == 0:
@@ -68,22 +73,22 @@ class VideoInference():
 
         for box in boxes:
             x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-            conf = float(box.conf[0])
-
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 255), 2)
-            cv2.putText(frame, f'{conf:.2f}', (x1, y1 - 6),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
 
             img, bbox_resized = self.transformation.test_transform(frame, [x1, y1, x2, y2])
 
             with torch.no_grad():
-                heatmap = self.pose_model(img.unsqueeze(0).to(DEVICE))   # (1, 17, hm_h, hm_w)
+                heatmap = self.pose_model(img.unsqueeze(0).to(self.device))   # (1, 17, hm_h, hm_w)
 
             preds, maxvals = t.heatmap_to_coord_simple(
                 hms=heatmap[0].cpu().numpy(),
                 bbox = bbox_resized
             )
             
+            conf = float(box.conf[0])
+
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 255), 2)
+            cv2.putText(frame, f'{conf:.2f}', (x1, y1 - 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
             frame = self.draw_joints(frame, preds, maxvals)
 
         return frame
@@ -91,8 +96,8 @@ class VideoInference():
     def build_pose_model(self, cfg_path, checkpoint_path):
         cfg = update_config(cfg_path)
         model = builder.build_sppe(cfg.MODEL, preset_cfg=cfg.DATA_PRESET)
-        model.load_state_dict(torch.load(checkpoint_path, map_location=DEVICE))
-        model.to(DEVICE).eval()
+        model.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
+        model.to(self.device).eval()
         print(f'Loaded AlphaPose model from {checkpoint_path}')
         return model, cfg
 
@@ -115,8 +120,6 @@ class VideoInference():
                 continue
 
             x, y = int(x), int(y)
-
-            color = (0, 0, 0)
 
             if i in HEAD:
                 color = COLORS['head']
