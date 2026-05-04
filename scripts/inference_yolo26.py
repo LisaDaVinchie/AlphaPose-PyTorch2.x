@@ -66,28 +66,35 @@ class VideoInference():
             device=self.device,
             verbose=False
         )
-        boxes = results[0].boxes
-
-        if boxes is None or len(boxes) == 0:
+        boxes = results[0].boxes.xyxy.cpu().numpy() if results[0].boxes is not None and len(results[0].boxes) > 0 else None
+        if boxes is None:
             return frame
+        
+        scores = results[0].boxes.conf.cpu().numpy()
 
+        images = []
+        bboxes_resized = []
         for box in boxes:
-            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-
+            x1, y1, x2, y2 = map(int, box.tolist())
             img, bbox_resized = self.transformation.test_transform(frame, [x1, y1, x2, y2])
+            images.append(img)
+            bboxes_resized.append(bbox_resized)
 
-            with torch.no_grad():
-                heatmap = self.pose_model(img.unsqueeze(0).to(self.device))   # (1, 17, hm_h, hm_w)
+        images = torch.stack(images, dim=0)
 
+        with torch.no_grad():
+            heatmap = self.pose_model(images.to(self.device)).cpu().numpy()   # (B, 17, hm_h, hm_w)
+        
+        for i in range(heatmap.shape[0]):
             preds, maxvals = t.heatmap_to_coord_simple(
-                hms=heatmap[0].cpu().numpy(),
-                bbox = bbox_resized
-            )
+                    hms=heatmap[i],
+                    bbox = bboxes_resized[i]
+                )
             
-            conf = float(box.conf[0])
 
+            x1, y1, x2, y2 = map(int, boxes[i].tolist())
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 255), 2)
-            cv2.putText(frame, f'{conf:.2f}', (x1, y1 - 6),
+            cv2.putText(frame, f'{scores[i]:.2f}', (x1, y1 - 6),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
             frame = self.draw_joints(frame, preds, maxvals)
 
