@@ -1,9 +1,3 @@
-# pose_pipeline.py
-# Run from AlphaPose repo root:
-#   python pose_pipeline.py --cfg configs/coco/resnet/256x192_res50_lr1e-3_1x.yaml \
-#                           --checkpoint pretrained_models/fast_res50_256x192.pth \
-#                           --source 0   (or path/to/video.mp4 or image.jpg)
-
 import argparse
 import cv2
 import numpy as np
@@ -15,15 +9,7 @@ from alphapose.utils.config import update_config
 from alphapose.utils.presets import SimpleTransform
 from alphapose.utils.transforms import get_affine_transform, affine_transform, get_max_pred
 import alphapose.utils.transforms as t
-from alphapose.datasets.mscoco import Mscoco
-
-class DummyDataset:
-    def __init__(self):
-        self.joint_pairs = [
-            (1,2),(3,4),(5,6),(7,8),
-            (9,10),(11,12),(13,14),(15,16)
-        ]
-        self.num_joints = 17
+from time import perf_counter
 
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -54,161 +40,128 @@ COLORS = {
 MEAN = [0.485, 0.456, 0.406]
 STD  = [0.229, 0.224, 0.225]
 
+class VideoInference():
+    def __init__(
+            self,
+            detector_weights = 'yolo26x.pt',
+            pose_model_cfg = './configs/coco/resnet/256x192_res50_lr1e-3_1x.yaml',
+            pose_model_weights = './model_files/fast_res50_256x192.pth'
+        ):
+        self.dataset = DummyDataset()
+        self.transformation = SimpleTransform(
+                dataset=self.dataset,
+                scale_factor=0,
+                input_size=(256, 192),
+                output_size=(64, 48),
+                rot=0,
+                sigma=2,
+                train=False,
+                add_dpg=False
+            )
+        
+        self.detector  = YOLO(detector_weights)
+        self.pose_model, cfg = self.build_pose_model(pose_model_cfg, pose_model_weights)
 
-def build_pose_model(cfg_path, checkpoint_path):
-    cfg = update_config(cfg_path)
-    model = builder.build_sppe(cfg.MODEL, preset_cfg=cfg.DATA_PRESET)
-    model.load_state_dict(torch.load(checkpoint_path, map_location=DEVICE))
-    model.to(DEVICE).eval()
-    print(f'Loaded AlphaPose model from {checkpoint_path}')
-    return model, cfg
+    def process_frame(self, frame, det_conf=0.4):
+        results = self.detector.predict(frame, classes=[0], conf=det_conf, verbose=False)
+        boxes = results[0].boxes
 
+        if boxes is None or len(boxes) == 0:
+            return frame
 
-def heatmap_to_joints(heatmap, center, scale, INPUT_W, INPUT_H):
-    hm = heatmap[0].cpu().numpy()       # (17, HM_H, HM_W)
-    HM_H, HM_W = hm.shape[-2], hm.shape[-1]
+        for box in boxes:
+            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+            conf = float(box.conf[0])
 
-    preds, maxvals = get_max_pred(hm)   # coords in heatmap space (0–48, 0–64)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 255), 2)
+            cv2.putText(frame, f'{conf:.2f}', (x1, y1 - 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
 
-    # scale heatmap coords up to input space (x4) BEFORE applying inverse transform
-    preds[:, 0] = (preds[:, 0] / HM_W) * INPUT_W
-    preds[:, 1] = (preds[:, 1] / HM_H) * INPUT_H
+            img, bbox_resized = self.transformation.test_transform(frame, [x1, y1, x2, y2])
 
-    # inverse transform uses INPUT size, matching preprocess_affine exactly
-    trans_inv = get_affine_transform(center, scale, 0, [INPUT_W, INPUT_H], inv=1)
-    coords = np.array([
-        affine_transform(preds[j], trans_inv)
-        for j in range(hm.shape[0])
-    ], dtype=np.float32)
+            with torch.no_grad():
+                heatmap = self.pose_model(img.unsqueeze(0).to(DEVICE))   # (1, 17, hm_h, hm_w)
 
-    return coords, maxvals[:, 0]
+            preds, maxvals = t.heatmap_to_coord_simple(
+                hms=heatmap[0].cpu().numpy(),
+                bbox = bbox_resized
+            )
+            
+            frame = self.draw_joints(frame, preds, maxvals)
 
-def draw_joints(img, keypoints, kp_score=None, thresh=0.3, skeleton = True):
-    """
-    keypoints: (K, 2)
-    kp_score: (K,) optional confidence
-    """
+        return frame
 
-    img = img.copy()
-    K = keypoints.shape[0]
+    def build_pose_model(self, cfg_path, checkpoint_path):
+        cfg = update_config(cfg_path)
+        model = builder.build_sppe(cfg.MODEL, preset_cfg=cfg.DATA_PRESET)
+        model.load_state_dict(torch.load(checkpoint_path, map_location=DEVICE))
+        model.to(DEVICE).eval()
+        print(f'Loaded AlphaPose model from {checkpoint_path}')
+        return model, cfg
 
-    for i in range(K):
-        x, y = keypoints[i]
+    def draw_joints(self, img, keypoints, kp_score=None, thresh=0.3, skeleton = True):
+        """
+        keypoints: (K, 2)
+        kp_score: (K,) optional confidence
+        """
 
-        # skip low confidence points
-        if kp_score is not None and kp_score[i] < thresh:
-            continue
+        img = img.copy()
+        K = keypoints.shape[0]
 
-        x, y = int(x), int(y)
+        low_conf = []
+        for i in range(K):
+            x, y = keypoints[i]
 
-        color = (0, 0, 0)
+            # skip low confidence points
+            if kp_score is not None and kp_score[i] < thresh:
+                low_conf.append(i)
+                continue
 
-        if i in HEAD:
-            color = COLORS['head']
-        elif i in ARMS:
-            color = COLORS['arms']
-        elif i in TORSO:
-            color = COLORS['torso']
-        elif i in LEGS:
-            color = COLORS['legs']
-        else:
+            x, y = int(x), int(y)
+
             color = (0, 0, 0)
 
-        cv2.circle(
-            img,
-            (x, y),
-            radius=3,
-            color=color,
-            thickness=-1
-        )
-    
-    if skeleton:
-        for (a, b) in COCO_PAIRS:
-            if (a, b) in HEAD:
+            if i in HEAD:
                 color = COLORS['head']
-            elif (a, b) in ARMS:
+            elif i in ARMS:
                 color = COLORS['arms']
-            elif (a, b) in TORSO:
+            elif i in TORSO:
                 color = COLORS['torso']
-            elif (a, b) in LEGS:
+            elif i in LEGS:
                 color = COLORS['legs']
             else:
                 color = (0, 0, 0)
 
-            x1, y1 = map(int, keypoints[a])
-            x2, y2 = map(int, keypoints[b])
-            cv2.line(img, (x1, y1), (x2, y2), color, 2)
-
-    return img
-
-def process_frame(frame, detector, pose_model, det_conf=0.4):
-    results = detector.predict(frame, classes=[0], conf=det_conf, verbose=False)
-    boxes = results[0].boxes
-
-    if boxes is None or len(boxes) == 0:
-        return frame
-
-    dataset = DummyDataset()
-
-    for box in boxes:
-        x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-        conf = float(box.conf[0])
-
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 255), 2)
-        cv2.putText(frame, f'{conf:.2f}', (x1, y1 - 6),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
-
-        transformation = SimpleTransform(
-            dataset=dataset,
-            scale_factor=0,
-            input_size=(256, 192),
-            output_size=(64, 48),
-            rot=0,
-            sigma=2,
-            train=False,
-            add_dpg=False
-        )
-
-        img, bbox = transformation.test_transform(frame, [x1, y1, x2, y2])
-
-        with torch.no_grad():
-            heatmap = pose_model(img.unsqueeze(0).to(DEVICE))   # (1, 17, hm_h, hm_w)
-
-        preds, maxvals = t.heatmap_to_coord_simple(
-            hms=heatmap[0].cpu().numpy(),
-            bbox = bbox
-        )
+            cv2.circle(
+                img,
+                (x, y),
+                radius=3,
+                color=color,
+                thickness=-1
+            )
         
-        frame = draw_joints(frame, preds, maxvals)
+        if skeleton:
+            for (a, b) in COCO_PAIRS:
+                if a in low_conf or b in low_conf:
+                    continue
+                if (a, b) in HEAD:
+                    color = COLORS['head']
+                elif (a, b) in ARMS:
+                    color = COLORS['arms']
+                elif (a, b) in TORSO:
+                    color = COLORS['torso']
+                elif (a, b) in LEGS:
+                    color = COLORS['legs']
+                else:
+                    color = (0, 0, 0)
 
-    return frame
+                x1, y1 = map(int, keypoints[a])
+                x2, y2 = map(int, keypoints[b])
+                cv2.line(img, (x1, y1), (x2, y2), color, 2)
 
-def draw_pose(img, keypoints, kp_score=None, thresh=0.3):
-    img = img.copy()
+        return img
 
-    # draw joints
-    for i, (x, y) in enumerate(keypoints):
-        if kp_score is not None and kp_score[i] < thresh:
-            continue
-
-        cv2.circle(img, (int(x), int(y)), 3, (0, 255, 0), -1)
-
-    # draw skeleton
-    for a, b in COCO_PAIRS:
-        if kp_score is not None:
-            if kp_score[a] < thresh or kp_score[b] < thresh:
-                continue
-
-        x1, y1 = map(int, keypoints[a])
-        x2, y2 = map(int, keypoints[b])
-
-        cv2.line(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
-
-    return img
-
-def run(args):
-    detector  = YOLO('yolo26x.pt')
-    pose_model, cfg = build_pose_model(args.cfg, args.checkpoint)
+def main(args):
 
     source = args.source
     # try casting to int for webcam index
@@ -217,11 +170,14 @@ def run(args):
     except (ValueError, TypeError):
         pass
 
+    pose = VideoInference(pose_model_weights=args.checkpoint,
+                          pose_model_cfg=args.cfg)
+
     # single image
     if isinstance(source, str) and source.lower().endswith(
             ('.jpg', '.jpeg', '.png', '.bmp', '.webp')):
         frame = cv2.imread(source)
-        result = process_frame(frame, detector, pose_model)
+        result = pose.process_frame(frame)
         cv2.imshow('Pose', result)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
@@ -231,17 +187,31 @@ def run(args):
     cap = cv2.VideoCapture(source)
     assert cap.isOpened(), f'Cannot open: {source}'
 
+    elapsed_times = []
+
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-        result = process_frame(frame, detector, pose_model)
+        start_time = perf_counter()
+        result = pose.process_frame(frame)
+        elapsed_times.append(perf_counter() - start_time)
         cv2.imshow('Pose', result)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
+    
+    print("Average time: ", np.sum(elapsed_times) / len(elapsed_times))
 
     cap.release()
     cv2.destroyAllWindows()
+
+class DummyDataset:
+    def __init__(self):
+        self.joint_pairs = [
+            (1,2),(3,4),(5,6),(7,8),
+            (9,10),(11,12),(13,14),(15,16)
+        ]
+        self.num_joints = 17
 
 
 if __name__ == '__main__':
@@ -254,4 +224,4 @@ if __name__ == '__main__':
                         help='0=webcam, or image/video path')
     parser.add_argument('--det-conf',   type=float, default=0.4)
     args = parser.parse_args()
-    run(args)
+    main(args)
