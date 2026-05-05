@@ -7,7 +7,6 @@ from ultralytics import YOLO
 from alphapose.models import builder
 from alphapose.utils.config import update_config
 from alphapose.utils.presets import SimpleTransform
-from alphapose.utils.transforms import get_affine_transform, affine_transform, get_max_pred
 import alphapose.utils.transforms as t
 from time import perf_counter
 
@@ -34,10 +33,59 @@ COLORS = {
     "legs":  (255, 0, 0)     # blue
 }
 
+def main(args):
+
+    source = args.source
+    # try casting to int for webcam index
+    try:
+        source = int(source)
+    except (ValueError, TypeError):
+        pass
+
+    pose = VideoInference(pose_model_weights=args.checkpoint,
+                          pose_model_cfg=args.cfg)
+
+    # single image
+    if isinstance(source, str) and source.lower().endswith(
+            ('.jpg', '.jpeg', '.png', '.bmp', '.webp')):
+        frame = cv2.imread(source)
+        result = pose.process_frame(frame)
+
+        frame = pose.draw_result(frame, result)
+
+        cv2.imshow('Pose', frame)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+        return
+
+    # video / webcam
+    cap = cv2.VideoCapture(source)
+    assert cap.isOpened(), f'Cannot open: {source}'
+
+    elapsed_times = []
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        start_time = perf_counter()
+        result = pose.process_frame(frame)
+        frame = pose.draw_result(frame, result)
+            
+        elapsed_times.append(perf_counter() - start_time)
+        cv2.imshow('Pose', frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+    
+    print("Average time: ", np.sum(elapsed_times) / len(elapsed_times))
+
+    cap.release()
+    cv2.destroyAllWindows()
+
 class VideoInference():
     def __init__(
             self,
-            detector_weights = 'yolo26x.pt',
+            detector_weights = './detector/yolo26/data/yolo26x.pt',
             pose_model_cfg = './configs/coco/resnet/256x192_res50_lr1e-3_1x.yaml',
             pose_model_weights = './model_files/fast_res50_256x192.pth'
         ):
@@ -190,55 +238,6 @@ class VideoInference():
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
             frame = self.draw_joints(frame, keypoints, pose_conf)
         return frame
-
-def main(args):
-
-    source = args.source
-    # try casting to int for webcam index
-    try:
-        source = int(source)
-    except (ValueError, TypeError):
-        pass
-
-    pose = VideoInference(pose_model_weights=args.checkpoint,
-                          pose_model_cfg=args.cfg)
-
-    # single image
-    if isinstance(source, str) and source.lower().endswith(
-            ('.jpg', '.jpeg', '.png', '.bmp', '.webp')):
-        frame = cv2.imread(source)
-        result = pose.process_frame(frame)
-
-        frame = pose.draw_result(frame, result)
-
-        cv2.imshow('Pose', frame)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-        return
-
-    # video / webcam
-    cap = cv2.VideoCapture(source)
-    assert cap.isOpened(), f'Cannot open: {source}'
-
-    elapsed_times = []
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        start_time = perf_counter()
-        result = pose.process_frame(frame)
-        frame = pose.draw_result(frame, result)
-            
-        elapsed_times.append(perf_counter() - start_time)
-        cv2.imshow('Pose', frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-    
-    print("Average time: ", np.sum(elapsed_times) / len(elapsed_times))
-
-    cap.release()
-    cv2.destroyAllWindows()
 
 class DummyDataset:
     def __init__(self):
