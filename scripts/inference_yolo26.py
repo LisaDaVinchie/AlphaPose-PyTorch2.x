@@ -10,6 +10,9 @@ from alphapose.utils.presets import SimpleTransform
 import alphapose.utils.transforms as t
 from time import perf_counter
 
+from dataclasses import dataclass, field
+import numpy as np
+
 COCO_PAIRS = [
     (0, 1), (0, 2), (1, 2), (1, 3), (2, 4), # Head
     (5, 6), (5, 11), (6, 12), (11, 12), # Torso
@@ -32,6 +35,14 @@ COLORS = {
     "arms":  (0, 255, 0),    # green
     "legs":  (255, 0, 0)     # blue
 }
+
+# BGR order for OpenCV
+BOUNDING_BOX_COLORS = [
+    (0, 165, 255),    # Orange
+    (255, 0, 128),    # Purple
+    (100, 200, 0),    # Emerald Green
+    (147, 20, 255),   # Hot Pink
+]
 
 def main(args):
 
@@ -112,7 +123,6 @@ class VideoInference():
     def process_frame(self, frame, det_conf=0.4):
         results = self.detector.predict(
             frame,
-            classes=[0],
             conf=det_conf,
             device=self.device,
             verbose=False
@@ -134,28 +144,32 @@ class VideoInference():
 
         boxes_person = [b for b, n in zip(boxes, names) if n == 0]
 
-        images = []
-        bboxes_resized = []
-        for box in boxes_person:
-            x1, y1, x2, y2 = map(int, box.tolist())
-            img, bbox_resized = self.transformation.test_transform(frame, [x1, y1, x2, y2])
-            images.append(img)
-            bboxes_resized.append(bbox_resized)
+        if len(boxes_person) > 0:
+            images = []
+            bboxes_resized = []
+            for box in boxes_person:
+                x1, y1, x2, y2 = map(int, box.tolist())
+                img, bbox_resized = self.transformation.test_transform(frame, [x1, y1, x2, y2])
+                images.append(img)
+                bboxes_resized.append(bbox_resized)
 
-        images = torch.stack(images, dim=0)
+            images = torch.stack(images, dim=0)
 
-        with torch.no_grad():
-            heatmap = self.pose_model(images.to(self.device)).cpu().numpy()   # (B, 17, hm_h, hm_w)
+            with torch.no_grad():
+                heatmap = self.pose_model(images.to(self.device)).cpu().numpy()   # (B, 17, hm_h, hm_w)
         
-        keypoints = []
-        pose_conf = []
-        for i in range(heatmap.shape[0]):
-            preds, maxvals = t.heatmap_to_coord_simple(
-                    hms=heatmap[i],
-                    bbox = bboxes_resized[i]
-                )
-            keypoints.append(preds)
-            pose_conf.append(maxvals)
+            keypoints = []
+            pose_conf = []
+            for i in range(heatmap.shape[0]):
+                preds, maxvals = t.heatmap_to_coord_simple(
+                        hms=heatmap[i],
+                        bbox = bboxes_resized[i]
+                    )
+                keypoints.append(preds)
+                pose_conf.append(maxvals)
+        else:
+            keypoints = []
+            pose_conf = []
 
         result = {
             "image": frame,
@@ -256,12 +270,24 @@ class VideoInference():
         """
         if len(result['boxes']) <= 0:
             return frame
-        for box, yolo_conf, keypoints, pose_conf in zip(result['boxes'], result['yolo_conf'], result['keypoints'], result['pose_conf']):
+
+        names_to_cls = self.detector.names
+        i = 0
+        for box, name, yolo_conf in zip(
+            result['boxes'], result['names'], result['yolo_conf']
+        ):
             x1, y1, x2, y2 = map(int, box.tolist())
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 255), 2)
-            cv2.putText(frame, f'{yolo_conf:.2f}', (x1, y1 - 6),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
-            frame = self.draw_joints(frame, keypoints, pose_conf)
+            color = BOUNDING_BOX_COLORS[int(name) % len(BOUNDING_BOX_COLORS)]
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+
+            cv2.putText(frame, names_to_cls[name], (x1, y1 - 6),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+            cv2.putText(frame, f"{yolo_conf:.2f}", (x2 - 2, y1 - 6),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+            
+            if name == 0:
+                frame = self.draw_joints(frame, result['keypoints'][i], result['pose_conf'][i])
+                i += 0
         return frame
 
 class DummyDataset:
@@ -271,6 +297,22 @@ class DummyDataset:
             (9,10),(11,12),(13,14),(15,16)
         ]
         self.num_joints = 17
+
+@dataclass
+class Detection:
+    box: np.ndarray          # [x1, y1, x2, y2]
+    name: int                # class id
+    yolo_conf: float
+    keypoints: np.ndarray | None = None   # only for persons
+    pose_conf: np.ndarray | None = None   # only for persons
+
+    @property
+    def is_person(self) -> bool:
+        return self.name == 0
+
+    @property
+    def has_pose(self) -> bool:
+        return self.keypoints is not None
 
 
 if __name__ == '__main__':
