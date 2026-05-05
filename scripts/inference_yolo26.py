@@ -10,6 +10,8 @@ from alphapose.utils.presets import SimpleTransform
 import alphapose.utils.transforms as t
 from time import perf_counter
 
+# from scripts.ActionsEstLoader import TSSTG
+
 from dataclasses import dataclass
 import numpy as np
 
@@ -104,17 +106,17 @@ class VideoInference():
         self.detector  = YOLO(detector_weights)
         self.pose_model, cfg = self.build_pose_model(pose_model_cfg, pose_model_weights)
 
+        # self.action_model = TSSTG(weight_file=args.action_weights)
+
+        # self.tracked_kpts = []
+
         dataset = builder.retrieve_dataset(cfg.DATASET.TRAIN)
-
-        self.n_joints = dataset.num_joints
-
-        # print(dataset.joint_pairs)
         
         self.transformation = SimpleTransform(
                 dataset=dataset,
                 scale_factor=0,
-                input_size=(256, 192),
-                output_size=(64, 48),
+                input_size=cfg.DATA_PRESET.IMAGE_SIZE,
+                output_size=cfg.DATA_PRESET.HEATMAP_SIZE,
                 rot=0,
                 sigma=2,
                 train=False,
