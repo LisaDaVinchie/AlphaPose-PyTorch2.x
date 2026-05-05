@@ -10,7 +10,9 @@ from alphapose.utils.presets import SimpleTransform
 import alphapose.utils.transforms as t
 from time import perf_counter
 
-from dataclasses import dataclass, field
+from alphapose.datasets.mscoco import Mscoco
+
+from dataclasses import dataclass
 import numpy as np
 
 COCO_PAIRS = [
@@ -119,7 +121,17 @@ class VideoInference():
             pose_model_cfg = './configs/coco/resnet/256x192_res50_lr1e-3_1x.yaml',
             pose_model_weights = './model_files/fast_res50_256x192.pth'
         ):
-        dataset = DummyDataset()
+
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        
+        self.detector  = YOLO(detector_weights)
+        self.pose_model, cfg = self.build_pose_model(pose_model_cfg, pose_model_weights)
+
+        # dataset = DummyDataset()
+        dataset = builder.retrieve_dataset(cfg.DATASET.TRAIN)
+
+        print(dataset.num_joints, dataset.joint_pairs)
+        
         self.transformation = SimpleTransform(
                 dataset=dataset,
                 scale_factor=0,
@@ -130,11 +142,6 @@ class VideoInference():
                 train=False,
                 add_dpg=False
             )
-
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        
-        self.detector  = YOLO(detector_weights)
-        self.pose_model, cfg = self.build_pose_model(pose_model_cfg, pose_model_weights)
 
     def process_frame(self, frame, det_conf=0.4):
         results = self.detector.predict(
