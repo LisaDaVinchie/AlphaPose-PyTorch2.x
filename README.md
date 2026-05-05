@@ -1,5 +1,9 @@
 # AlphaPose - PyTorch2.x
 
+## Overview
+
+Alphapose adaptation to `Python > 3.8`, `PyTorch > 1.13` and `YOLO26`.
+
 ## Installation
 
 Tested for python 3.11.15
@@ -81,4 +85,14 @@ with
 ```python
 from alphapose.utils.safe_import import import_tkinter
 import_tkinter()
+```
+
+## Usage
+
+```bash
+python -m scripts.inference_yolo26 \
+    --cfg ./configs/coco/resnet/256x192_res50_lr1e-3_1x.yaml \
+    --checkpoint ./model_files/fast_res50_256x192.pth \
+    --det-weights ./detector/yolo26/data/yolo26m.pt \
+    --source 0
 ```
