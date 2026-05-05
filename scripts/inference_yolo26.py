@@ -44,6 +44,22 @@ BOUNDING_BOX_COLORS = [
     (147, 20, 255),   # Hot Pink
 ]
 
+@dataclass
+class Detection:
+    box: np.ndarray          # [x1, y1, x2, y2]
+    name: int                # class id
+    yolo_conf: float
+    keypoints: np.ndarray | None = None   # only for persons
+    pose_conf: np.ndarray | None = None   # only for persons
+
+    @property
+    def is_person(self) -> bool:
+        return self.name == 0
+
+    @property
+    def has_pose(self) -> bool:
+        return self.keypoints is not None
+
 def main(args):
 
     source = args.source
@@ -127,28 +143,25 @@ class VideoInference():
             device=self.device,
             verbose=False
         )
-        boxes = results[0].boxes.xyxy.cpu().numpy() if results[0].boxes is not None and len(results[0].boxes) > 0 else None
-        if boxes is None:
-            result = {
-                "image": frame,
-                "boxes": [],
-                "names": [],
-                "yolo_conf": [],
-                "keypoints": [],
-                "pose_conf": []
-            }
-            return result
         
+        if results[0].boxes is None or len(results[0].boxes) == 0:
+            return []
+        
+        boxes = results[0].boxes.xyxy.cpu().numpy()
         scores = results[0].boxes.conf.cpu().numpy()
         names = results[0].boxes.cls.cpu().numpy()
+        detections = [
+            Detection(box=box, name=int(name), yolo_conf=conf)
+            for box, name, conf in zip(boxes, names, scores)
+        ]
 
-        boxes_person = [b for b, n in zip(boxes, names) if n == 0]
+        person_dets = [d for d in detections if d.is_person]
 
-        if len(boxes_person) > 0:
+        if len(person_dets) > 0:
             images = []
             bboxes_resized = []
-            for box in boxes_person:
-                x1, y1, x2, y2 = map(int, box.tolist())
+            for d in person_dets:
+                x1, y1, x2, y2 = map(int, d.box.tolist())
                 img, bbox_resized = self.transformation.test_transform(frame, [x1, y1, x2, y2])
                 images.append(img)
                 bboxes_resized.append(bbox_resized)
@@ -158,29 +171,15 @@ class VideoInference():
             with torch.no_grad():
                 heatmap = self.pose_model(images.to(self.device)).cpu().numpy()   # (B, 17, hm_h, hm_w)
         
-            keypoints = []
-            pose_conf = []
-            for i in range(heatmap.shape[0]):
+            for d, hm, bbox_r in zip(person_dets, heatmap, bboxes_resized):
                 preds, maxvals = t.heatmap_to_coord_simple(
-                        hms=heatmap[i],
-                        bbox = bboxes_resized[i]
+                        hms=hm,
+                        bbox = bbox_r
                     )
-                keypoints.append(preds)
-                pose_conf.append(maxvals)
-        else:
-            keypoints = []
-            pose_conf = []
+                d.keypoints = preds
+                d.pose_conf = maxvals
 
-        result = {
-            "image": frame,
-            "boxes": boxes,
-            "names": names,
-            "yolo_conf": scores,
-            "keypoints": keypoints,
-            "pose_conf": pose_conf
-        }
-
-        return result
+        return detections
 
     def build_pose_model(self, cfg_path, checkpoint_path):
         cfg = update_config(cfg_path)
@@ -258,36 +257,22 @@ class VideoInference():
 
         return img
     
-    def draw_result(self, frame, result: dict):
-        """Draw bounding boxes and joints
-
-        Args:
-            frame (_type_): _description_
-            result (dict): dictionary containing the inferencew results
-
-        Returns:
-            _type_: annotated frame
-        """
-        if len(result['boxes']) <= 0:
-            return frame
-
+    def draw_result(self, frame, detections: list[Detection]):
         names_to_cls = self.detector.names
-        i = 0
-        for box, name, yolo_conf in zip(
-            result['boxes'], result['names'], result['yolo_conf']
-        ):
-            x1, y1, x2, y2 = map(int, box.tolist())
-            color = BOUNDING_BOX_COLORS[int(name) % len(BOUNDING_BOX_COLORS)]
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
-            cv2.putText(frame, names_to_cls[name], (x1, y1 - 6),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-            cv2.putText(frame, f"{yolo_conf:.2f}", (x2 - 2, y1 - 6),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-            
-            if name == 0:
-                frame = self.draw_joints(frame, result['keypoints'][i], result['pose_conf'][i])
-                i += 0
+        for det in detections:
+            x1, y1, x2, y2 = map(int, det.box.tolist())
+            color = BOUNDING_BOX_COLORS[int(det.name) % len(BOUNDING_BOX_COLORS)]
+
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(frame, names_to_cls[int(det.name)], (x1, y1 - 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+            cv2.putText(frame, f"{det.yolo_conf:.2f}", (x2 - 2, y1 - 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+            if det.has_pose:
+                frame = self.draw_joints(frame, det.keypoints, det.pose_conf)
+
         return frame
 
 class DummyDataset:
@@ -297,22 +282,6 @@ class DummyDataset:
             (9,10),(11,12),(13,14),(15,16)
         ]
         self.num_joints = 17
-
-@dataclass
-class Detection:
-    box: np.ndarray          # [x1, y1, x2, y2]
-    name: int                # class id
-    yolo_conf: float
-    keypoints: np.ndarray | None = None   # only for persons
-    pose_conf: np.ndarray | None = None   # only for persons
-
-    @property
-    def is_person(self) -> bool:
-        return self.name == 0
-
-    @property
-    def has_pose(self) -> bool:
-        return self.keypoints is not None
 
 
 if __name__ == '__main__':
