@@ -1,116 +1,244 @@
-from PIL import Image, ImageDraw, ImageFont
-from collections import defaultdict
-from pathlib import Path
+import cv2
+import numpy as np
 
-class VisualizeResults:
-    def __init__(self, font_size = 20):
-        """Initialise the class to show the predicted classes.
+COLORS = {
+    "head":  (0, 255, 255),  # yellow
+    "torso": (255, 0, 255),  # magenta
+    "arms":  (0, 255, 0),    # green
+    "legs":  (255, 0, 0)     # blue
+}
 
-        Args:
-            font_size (int): size of the font. Dfaults to 20.
-        """
-        self.colors = [
-            "#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4",
-            "#FFEAA7", "#DDA0DD", "#98D8C8", "#F7DC6F",
-        ]
+# BGR order for OpenCV
+BOUNDING_BOX_COLORS = [
+    (0, 165, 255),    # Orange
+    (255, 0, 128),    # Purple
+    (100, 200, 0),    # Emerald Green
+    (147, 20, 255),   # Hot Pink
+]
 
-        try:
-            self.font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
-        except Exception:
-            self.font = ImageFont.load_default()
+RED = (0, 0, 255)
+GREEN = (0, 255, 0)
+BLUE = (255, 0, 0)
+CYAN = (255, 255, 0)
+YELLOW = (0, 255, 255)
+ORANGE = (0, 165, 255)
+PURPLE = (255, 0, 255)
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
 
-    def get_thumbnail_images(self, thumbnails_dir: Path) -> dict:
-        """Get a list of paths of thumbnail images.
+def draw_joints(img, keypoints, kp_score: list = None, thresh: float = 0.3, skeleton: bool = True):
+    """Draw pose joints and skeleton
 
-        Args:
-            thumbnails_dir (Path): directory where the images are stored, with names of the form "<class_name>*"
+    Args:
+        img (_type_): _description_
+        keypoints (_type_): _description_
+        kp_score (list, optional): _description_. Defaults to None.
+        thresh (float, optional): _description_. Defaults to 0.3.
+        skeleton (bool, optional): _description_. Defaults to True.
 
-        Returns:
-            dict: dictionary with class names as keys and image paths as elements. One path per class.
-            None if no image is found or the directory does not exist.
-        """
-        if not thumbnails_dir.exists():
-            print("Warning: no thumbnail dir found")
-            return None
+    Returns:
+        _type_: _description_
+    """
 
-        mini_images_list = list(thumbnails_dir.glob("*.jpg")) + \
-                            list(thumbnails_dir.glob("*.jpeg")) + \
-                            list(thumbnails_dir.glob("*.png"))
-        
-        class_to_img = defaultdict(str)
+    img = img.copy()
+    K = keypoints.shape[0]
 
-        for path in mini_images_list:
-            class_name = "_".join(path.stem.split("_")[0:2])
-            if class_name in list(class_to_img.keys()):
-                continue
-            class_to_img[class_name] = path
-        
-        return class_to_img if class_to_img else None
+    joint_pairs, joint_color, lines_color = get_joint_pairs(K, 'coco')
 
-    def visualize(
-            self,
-            result: dict,
-            save_path: Path = None,
-            show: bool = False,
-            base_offset: tuple = (50, 100),
-            img_spacing: tuple = (50, 100)
-        ) -> Image:
-        """Visualize the predicted result by drawing bounding boxes, labels and scores.
 
-        Args:
-            result (dict): dictionary with the results. 
-            save_path (Path, optional): path to save the created image. Defaults to None.
-            show (bool, optional): choose to show the image. Defaults to False.
-            base_offset (tuple, optional): distance between the thumbnail and the image border, in pixels. Defaults to (50, 100).
-            img_spacing (tuple, optional): distance between the shown thumbnails, if more than one is shown. Defaults to (50, 100).
 
-        Returns:
-            Image: modified image
-        """
-        image = result["image"].copy()
-        draw  = ImageDraw.Draw(image)
-        
-        offset = [base_offset[0], base_offset[1]] # width, height
-        for box, names, scores, yconf in zip(
-            result["boxes"], result["names"],
-            result["scores"], result["yolo_conf"]
-        ):
-            
-            # Draw the bounding box with the most probable label
-            self.draw_bbox_w_label(draw, box, names, scores)
+    low_conf = []
+    for i in range(K):
+        x, y = keypoints[i]
 
-        if save_path is not None:
-            if isinstance(save_path, str):
-                save_path = Path(save_path)
-            save_path.parent.mkdir(exist_ok=True, parents=True)
-            image.save(save_path)
-            print(f"Saved to {save_path}")
+        # skip low confidence points
+        if kp_score is not None and kp_score[i] < thresh:
+            low_conf.append(i)
+            continue
 
-        if show:
-            image.show()
+        x, y = int(x), int(y)
 
-        return image
+        color = joint_color[i]
+
+        cv2.circle(
+            img,
+            (x, y),
+            radius=3,
+            color=color,
+            thickness=-1
+        )
     
-    def draw_bbox_w_label(self, draw, box: list, name: str, score: float, text_align = 'l'):
+    if skeleton:
+        for pair, line_color in zip(joint_pairs, lines_color):
+            
+            a, b = pair
+            if a in low_conf or b in low_conf:
+                continue
 
-        x1, y1, x2, y2 = map(int, box)
+            x1, y1 = map(int, keypoints[a])
+            x2, y2 = map(int, keypoints[b])
+            cv2.line(img, (x1, y1), (x2, y2), line_color, 2)
 
-        # Draw label rectangle
-        label = f"{name} ({score:.2f})"
-        # label = f"{y2 - y1}"
-        bbox  = self.font.getbbox(label)
-        box_w, box_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        
-        color = self.colors[hash(name) % len(self.colors)]
-        draw.rectangle([x1, y1, x2, y2], outline=color, width=4) # Draw object bounding box
+    return img
 
-        # Draw text rectangle and text
-        x1_t = x2 - box_w - 6 if text_align == 'r' else x1
-        x2_t = x2 if text_align == 'r' else x1 + box_w + 6
-        y1_t = y1 - box_h - 4
-        y2_t = y1
-        draw.rectangle([x1_t, y1_t, x2_t, y2_t], fill=color)
-        draw.text((x1_t, y1_t), label,
-                    fill="white", font=self.font,
-                    stroke_width=2,
-                    stroke_fill="black")
+def get_joint_pairs(kp_num, format):
+    if kp_num == 17:
+        if format == 'coco':
+
+            l_pair = [
+                (0, 1), (0, 2), (1, 2), (1, 3), (2, 4), # Head
+                (5, 6), (5, 11), (6, 12), (11, 12), # Torso
+                (5, 7), (5, 9), (6, 8), (8, 10), # Arms
+                (11, 13), (13, 15), (12, 14), (14, 16) # Legs
+            ]
+
+            line_color = [COLORS['head']] * 5 + [COLORS['torso']] * 4 + [COLORS['arms']] * 4 + [COLORS['legs']] * 4
+
+            HEAD = [0, 1, 2, 3, 4]
+
+            TORSO = [5, 6, 11, 12]
+
+            ARMS = [7, 8, 9, 10]
+
+            LEGS = [13, 14, 15, 16]
+
+            p_color = get_point_colors(HEAD, TORSO, ARMS, LEGS)
+
+        elif format == 'mpii':
+            l_pair = [
+                (8, 9), (11, 12), (11, 10), (2, 1), (1, 0),
+                (13, 14), (14, 15), (3, 4), (4, 5),
+                (8, 7), (7, 6), (6, 2), (6, 3), (8, 12), (8, 13)
+            ]
+            p_color = [PURPLE, BLUE, BLUE, RED, RED, BLUE, BLUE, RED, RED, PURPLE, PURPLE, PURPLE, RED, RED, BLUE, BLUE]
+        else:
+            raise NotImplementedError
+    elif kp_num == 136:
+        l_pair = [
+            (0, 1), (0, 2), (1, 3), (2, 4),  # Head
+            (5, 18), (6, 18), (5, 7), (7, 9), (6, 8), (8, 10),# Body
+            (17, 18), (18, 19), (19, 11), (19, 12),
+            (11, 13), (12, 14), (13, 15), (14, 16),
+            (20, 24), (21, 25), (23, 25), (22, 24), (15, 24), (16, 25),# Foot
+            (26, 27),(27, 28),(28, 29),(29, 30),(30, 31),(31, 32),(32, 33),(33, 34),(34, 35),(35, 36),(36, 37),(37, 38),#Face
+            (38, 39),(39, 40),(40, 41),(41, 42),(43, 44),(44, 45),(45, 46),(46, 47),(48, 49),(49, 50),(50, 51),(51, 52),#Face
+            (53, 54),(54, 55),(55, 56),(57, 58),(58, 59),(59, 60),(60, 61),(62, 63),(63, 64),(64, 65),(65, 66),(66, 67),#Face
+            (68, 69),(69, 70),(70, 71),(71, 72),(72, 73),(74, 75),(75, 76),(76, 77),(77, 78),(78, 79),(79, 80),(80, 81),#Face
+            (81, 82),(82, 83),(83, 84),(84, 85),(85, 86),(86, 87),(87, 88),(88, 89),(89, 90),(90, 91),(91, 92),(92, 93),#Face
+            (94,95),(95,96),(96,97),(97,98),(94,99),(99,100),(100,101),(101,102),(94,103),(103,104),(104,105),#LeftHand
+            (105,106),(94,107),(107,108),(108,109),(109,110),(94,111),(111,112),(112,113),(113,114),#LeftHand
+            (115,116),(116,117),(117,118),(118,119),(115,120),(120,121),(121,122),(122,123),(115,124),(124,125),#RightHand
+            (125,126),(126,127),(115,128),(128,129),(129,130),(130,131),(115,132),(132,133),(133,134),(134,135)#RightHand
+        ]
+        p_color = [(0, 255, 255), (0, 191, 255), (0, 255, 102), (0, 77, 255), (0, 255, 0),  # Nose, LEye, REye, LEar, REar
+                (77, 255, 255), (77, 255, 204), (77, 204, 255), (191, 255, 77), (77, 191, 255), (191, 255, 77),  # LShoulder, RShoulder, LElbow, RElbow, LWrist, RWrist
+                (204, 77, 255), (77, 255, 204), (191, 77, 255), (77, 255, 191), (127, 77, 255), (77, 255, 127),  # LHip, RHip, LKnee, Rknee, LAnkle, RAnkle, Neck
+                (77, 255, 255), (0, 255, 255), (77, 204, 255),  # head, neck, shoulder
+                (0, 255, 255), (0, 191, 255), (0, 255, 102), (0, 77, 255), (0, 255, 0), (77, 255, 255)] # foot
+    
+        line_color = [(0, 215, 255), (0, 255, 204), (0, 134, 255), (0, 255, 50),
+                    (0, 255, 102), (77, 255, 222), (77, 196, 255), (77, 135, 255), (191, 255, 77), (77, 255, 77),
+                    (77, 191, 255), (204, 77, 255), (77, 222, 255), (255, 156, 127),
+                    (0, 127, 255), (255, 127, 77), (0, 77, 255), (255, 77, 36), 
+                    (0, 77, 255), (0, 77, 255), (0, 77, 255), (0, 77, 255), (255, 156, 127), (255, 156, 127)]
+    elif kp_num == 133:
+        l_pair = [
+            (0, 1), (0, 2), (1, 3), (2, 4),  # Head
+            (5, 7), (7, 9), (6, 8), (8, 10),# Body
+            (11, 13), (12, 14), (13, 15), (14, 16),
+            (18, 19), (21, 22), (20, 22), (17, 19), (15, 19), (16, 22), 
+            (23, 24), (24, 25), (25, 26), (26, 27), (27, 28), (28, 29), (29, 30), (30, 31), (31, 32), (32, 33), (33, 34), (34, 35), 
+            (35, 36), (36, 37), (37, 38), (38, 39), (40, 41), (41, 42), (42, 43), (43, 44), (45, 46), (46, 47), (47, 48), (48, 49), 
+            (50, 51), (51, 52), (52, 53), (54, 55), (55, 56), (56, 57), (57, 58), (59, 60), (60, 61), (61, 62), (62, 63), (63, 64), 
+            (65, 66), (66, 67), (67, 68), (68, 69), (69, 70), (71, 72), (72, 73), (73, 74), (74, 75), (75, 76), (76, 77), (77, 78), 
+            (78, 79), (79, 80), (80, 81), (81, 82), (82, 83), (83, 84), (84, 85), (85, 86), (86, 87), (87, 88), (88, 89), (89, 90), 
+            (91, 92), (92, 93), (93, 94), (94, 95), (91, 96), (96, 97), (97, 98), (98, 99), (91, 100), (100, 101), (101, 102), 
+            (102, 103), (91, 104), (104, 105), (105, 106), (106, 107), (91, 108), (108, 109), (109, 110), (110, 111), (112, 113), 
+            (113, 114), (114, 115), (115, 116), (112, 117), (117, 118), (118, 119), (119, 120), (112, 121), (121, 122), (122, 123), 
+            (123, 124), (112, 125), (125, 126), (126, 127), (127, 128), (112, 129), (129, 130), (130, 131), (131, 132)
+        ]
+        p_color = [(0, 255, 255), (0, 191, 255), (0, 255, 102), (0, 77, 255), (0, 255, 0),  # Nose, LEye, REye, LEar, REar
+                (77, 255, 255), (77, 255, 204), (77, 204, 255), (191, 255, 77), (77, 191, 255), (191, 255, 77),  # LShoulder, RShoulder, LElbow, RElbow, LWrist, RWrist
+                (204, 77, 255), (77, 255, 204), (191, 77, 255), (77, 255, 191), (127, 77, 255), (77, 255, 127),  # LHip, RHip, LKnee, Rknee, LAnkle, RAnkle, Neck
+                (0, 255, 255), (0, 191, 255), (0, 255, 102), (0, 77, 255), (0, 255, 0), (77, 255, 255)] # foot
+    
+        line_color = [(0, 215, 255), (0, 255, 204), (0, 134, 255), (0, 255, 50),
+                    (0, 255, 102), (77, 255, 222), (77, 196, 255), (77, 135, 255), (191, 255, 77), (77, 255, 77),
+                    (77, 191, 255), (204, 77, 255), (77, 222, 255), (255, 156, 127),
+                    (0, 127, 255), (255, 127, 77), (0, 77, 255), (255, 77, 36), 
+                    (0, 77, 255), (0, 77, 255), (0, 77, 255), (0, 77, 255)]
+    elif kp_num == 68:
+        l_pair = [
+            (0, 1), (0, 2), (1, 3), (2, 4),  # Head
+            (5, 18), (6, 18), (5, 7), (7, 9), (6, 8), (8, 10),# Body
+            (17, 18), (18, 19), (19, 11), (19, 12),
+            (11, 13), (12, 14), (13, 15), (14, 16),
+            (20, 24), (21, 25), (23, 25), (22, 24), (15, 24), (16, 25),# Foot
+            (26, 27), (27, 28), (28, 29), (29, 30), (26, 31), (31, 32), (32, 33), (33, 34), 
+            (26, 35), (35, 36), (36, 37), (37, 38), (26, 39), (39, 40), (40, 41), (41, 42), 
+            (26, 43), (43, 44), (44, 45), (45, 46), (47, 48), (48, 49), (49, 50), (50, 51), 
+            (47, 52), (52, 53), (53, 54), (54, 55), (47, 56), (56, 57), (57, 58), (58, 59), 
+            (47, 60), (60, 61), (61, 62), (62, 63), (47, 64), (64, 65), (65, 66), (66, 67)
+        ]
+        p_color = [(0, 255, 255), (0, 191, 255), (0, 255, 102), (0, 77, 255), (0, 255, 0),  # Nose, LEye, REye, LEar, REar
+                (77, 255, 255), (77, 255, 204), (77, 204, 255), (191, 255, 77), (77, 191, 255), (191, 255, 77),  # LShoulder, RShoulder, LElbow, RElbow, LWrist, RWrist
+                (204, 77, 255), (77, 255, 204), (191, 77, 255), (77, 255, 191), (127, 77, 255), (77, 255, 127),  # LHip, RHip, LKnee, Rknee, LAnkle, RAnkle, Neck
+                (77, 255, 255), (0, 255, 255), (77, 204, 255),  # head, neck, shoulder
+                (0, 255, 255), (0, 191, 255), (0, 255, 102), (0, 77, 255), (0, 255, 0), (77, 255, 255)] # foot
+    
+        line_color = [(0, 215, 255), (0, 255, 204), (0, 134, 255), (0, 255, 50),
+                    (0, 255, 102), (77, 255, 222), (77, 196, 255), (77, 135, 255), (191, 255, 77), (77, 255, 77),
+                    (77, 191, 255), (204, 77, 255), (77, 222, 255), (255, 156, 127),
+                    (0, 127, 255), (255, 127, 77), (0, 77, 255), (255, 77, 36), 
+                    (0, 77, 255), (0, 77, 255), (0, 77, 255), (0, 77, 255), (255, 156, 127), (255, 156, 127)]
+    elif kp_num == 26:
+        l_pair = [
+            (0, 1), (0, 2), (1, 3), (2, 4),  # Head
+            (5, 18), (6, 18), (5, 7), (7, 9), (6, 8), (8, 10),# Body
+            (17, 18), (18, 19), (19, 11), (19, 12),
+            (11, 13), (12, 14), (13, 15), (14, 16),
+            (20, 24), (21, 25), (23, 25), (22, 24), (15, 24), (16, 25),# Foot
+        ]
+        p_color = [(0, 255, 255), (0, 191, 255), (0, 255, 102), (0, 77, 255), (0, 255, 0),  # Nose, LEye, REye, LEar, REar
+                (77, 255, 255), (77, 255, 204), (77, 204, 255), (191, 255, 77), (77, 191, 255), (191, 255, 77),  # LShoulder, RShoulder, LElbow, RElbow, LWrist, RWrist
+                (204, 77, 255), (77, 255, 204), (191, 77, 255), (77, 255, 191), (127, 77, 255), (77, 255, 127),  # LHip, RHip, LKnee, Rknee, LAnkle, RAnkle, Neck
+                (77, 255, 255), (0, 255, 255), (77, 204, 255),  # head, neck, shoulder
+                (0, 255, 255), (0, 191, 255), (0, 255, 102), (0, 77, 255), (0, 255, 0), (77, 255, 255)] # foot
+    
+        line_color = [(0, 215, 255), (0, 255, 204), (0, 134, 255), (0, 255, 50),
+                    (0, 255, 102), (77, 255, 222), (77, 196, 255), (77, 135, 255), (191, 255, 77), (77, 255, 77),
+                    (77, 191, 255), (204, 77, 255), (77, 222, 255), (255, 156, 127),
+                    (0, 127, 255), (255, 127, 77), (0, 77, 255), (255, 77, 36), 
+                    (0, 77, 255), (0, 77, 255), (0, 77, 255), (0, 77, 255), (255, 156, 127), (255, 156, 127)]
+    elif kp_num == 21:
+        l_pair = [
+            (0, 1), (1, 2), (2, 3), (3, 4), (0, 5), (5, 6), (6, 7), (7, 8), 
+            (0, 9), (9, 10), (10, 11), (11, 12), (0, 13), (13, 14), (14, 15), 
+            (15, 16), (0, 17), (17, 18), (18, 19), (19, 20), (21, 22), (22, 23),
+            (23, 24), (24, 25), (21, 26), (26, 27), (27, 28), (28, 29), (21, 30), 
+            (30, 31), (31, 32), (32, 33), (21, 34), (34, 35), (35, 36), (36, 37), 
+            (21, 38), (38, 39), (39, 40), (40, 41)
+        ]
+        p_color = [(255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255),
+                (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255),
+                (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255),
+                (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255),
+                (255, 255, 255) ]
+    
+        line_color = [(255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255),
+                (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255),
+                (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255),
+                (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255),
+                (255, 255, 255) ]
+    else:
+        raise NotImplementedError
+    
+    return l_pair, p_color, line_color
+
+def get_point_colors(head_points, torso_points, arms_points, legs_points):
+    ordered_points = head_points + torso_points + arms_points + legs_points
+    ordered_idx = np.argsort(ordered_points)
+    p_color = [COLORS['head']] * len(head_points) + [COLORS['torso']] * len(torso_points) + [COLORS['arms']] * len(arms_points) + [COLORS['legs']] * len(legs_points)
+
+    p_color = [p_color[i] for i in ordered_idx]
+    return p_color
