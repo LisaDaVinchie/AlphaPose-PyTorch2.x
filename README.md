@@ -89,6 +89,18 @@ import_tkinter()
 
 ## Usage
 
+Download the weights of one of the `MSCOCO dataset` models from the [model zoo](https://github.com/MVIG-SJTU/AlphaPose/blob/master/docs/MODEL_ZOO.md) and save it to `model_files`. Then download the corresponsding config or retrieve it from `./configs` and run:
+
+```bash
+python -m scripts.inference_yolo26 \
+    --cfg ./path/to/config.yaml \
+    --checkpoint ./path/to/pose/detection/weights.pth \
+    --det-weights ./path/to/yolo/object/detection/weights.pt \
+    --source 0 or path/to/file
+```
+
+Example with `MSCOCO Fast Pose`.
+
 ```bash
 python -m scripts.inference_yolo26 \
     --cfg ./configs/coco/resnet/256x192_res50_lr1e-3_1x.yaml \
