@@ -99,7 +99,7 @@ python -m scripts.inference_yolo26 \
     --source 0 or path/to/file
 ```
 
-Example with `MSCOCO Fast Pose`.
+Example with `MSCOCO Fast Pose weights` ([download](https://drive.google.com/open?id=1kQhnMRURFiy7NsdS8EFL-8vtqEXOgECn)) and `yolo26m`.
 
 ```bash
 python -m scripts.inference_yolo26 \
