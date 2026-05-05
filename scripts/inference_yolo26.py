@@ -122,6 +122,7 @@ class VideoInference():
             result = {
                 "image": frame,
                 "boxes": [],
+                "names": [],
                 "yolo_conf": [],
                 "keypoints": [],
                 "pose_conf": []
@@ -129,10 +130,13 @@ class VideoInference():
             return result
         
         scores = results[0].boxes.conf.cpu().numpy()
+        names = results[0].boxes.cls.cpu().numpy()
+
+        boxes_person = [b for b, n in zip(boxes, names) if n == 0]
 
         images = []
         bboxes_resized = []
-        for box in boxes:
+        for box in boxes_person:
             x1, y1, x2, y2 = map(int, box.tolist())
             img, bbox_resized = self.transformation.test_transform(frame, [x1, y1, x2, y2])
             images.append(img)
@@ -156,6 +160,7 @@ class VideoInference():
         result = {
             "image": frame,
             "boxes": boxes,
+            "names": names,
             "yolo_conf": scores,
             "keypoints": keypoints,
             "pose_conf": pose_conf
@@ -171,10 +176,18 @@ class VideoInference():
         print(f'Loaded AlphaPose model from {checkpoint_path}')
         return model, cfg
 
-    def draw_joints(self, img, keypoints, kp_score=None, thresh=0.3, skeleton = True):
-        """
-        keypoints: (K, 2)
-        kp_score: (K,) optional confidence
+    def draw_joints(self, img, keypoints, kp_score: list = None, thresh: float = 0.3, skeleton: bool = True):
+        """Draw pose joints and skeleton
+
+        Args:
+            img (_type_): _description_
+            keypoints (_type_): _description_
+            kp_score (list, optional): _description_. Defaults to None.
+            thresh (float, optional): _description_. Defaults to 0.3.
+            skeleton (bool, optional): _description_. Defaults to True.
+
+        Returns:
+            _type_: _description_
         """
 
         img = img.copy()
@@ -231,7 +244,16 @@ class VideoInference():
 
         return img
     
-    def draw_result(self, frame, result):
+    def draw_result(self, frame, result: dict):
+        """Draw bounding boxes and joints
+
+        Args:
+            frame (_type_): _description_
+            result (dict): dictionary containing the inferencew results
+
+        Returns:
+            _type_: annotated frame
+        """
         if len(result['boxes']) <= 0:
             return frame
         for box, yolo_conf, keypoints, pose_conf in zip(result['boxes'], result['yolo_conf'], result['keypoints'], result['pose_conf']):
