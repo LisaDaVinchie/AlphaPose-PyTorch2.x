@@ -42,8 +42,11 @@ def main(args):
     except (ValueError, TypeError):
         pass
 
-    pose = VideoInference(pose_model_weights=args.checkpoint,
-                          pose_model_cfg=args.cfg)
+    pose = VideoInference(
+        detector_weights=args.det_weights,
+        pose_model_weights=args.checkpoint,
+        pose_model_cfg=args.cfg
+    )
 
     # single image
     if isinstance(source, str) and source.lower().endswith(
@@ -250,12 +253,13 @@ class DummyDataset:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--cfg',        required=True,
+    parser.add_argument('--cfg', required=True,
                         help='AlphaPose config yaml')
     parser.add_argument('--checkpoint', required=True,
                         help='AlphaPose .pth checkpoint')
-    parser.add_argument('--source',     default='0',
+    parser.add_argument('--source', default='0',
                         help='0=webcam, or image/video path')
-    parser.add_argument('--det-conf',   type=float, default=0.4)
+    parser.add_argument('--det-conf', type=float, default=0.4)
+    parser.add_argument('--det-weights', type=str, default='./detector/yolo26/data/yolo26m.pt')
     args = parser.parse_args()
     main(args)
