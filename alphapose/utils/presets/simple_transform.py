@@ -264,7 +264,7 @@ class SimpleTransform(object):
         img[2].add_(-0.480)
         
         if self._loss_type == 'Combined':
-        	return img, [torch.from_numpy(target_mse), torch.from_numpy(target_inter)], [torch.from_numpy(target_weight_mse), torch.from_numpy(target_weight_inter)], torch.Tensor(bbox)
+            return img, [torch.from_numpy(target_mse), torch.from_numpy(target_inter)], [torch.from_numpy(target_weight_mse), torch.from_numpy(target_weight_inter)], torch.Tensor(bbox)
         else:
             return img, torch.from_numpy(target), torch.from_numpy(target_weight), torch.Tensor(bbox)
 
