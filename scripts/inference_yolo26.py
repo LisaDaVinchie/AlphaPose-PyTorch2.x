@@ -10,8 +10,6 @@ from alphapose.utils.presets import SimpleTransform
 import alphapose.utils.transforms as t
 from time import perf_counter
 
-# from scripts.ActionsEstLoader import TSSTG
-
 from dataclasses import dataclass
 import numpy as np
 
@@ -88,7 +86,7 @@ def main(args):
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
     
-    print("Average time: ", np.sum(elapsed_times) / len(elapsed_times))
+    print(f"Average time: {(1000 * np.sum(elapsed_times) / len(elapsed_times)):.2f} ms")
 
     cap.release()
     cv2.destroyAllWindows()
@@ -106,10 +104,6 @@ class VideoInference():
         self.detector  = YOLO(detector_weights)
         self.pose_model, cfg = self.build_pose_model(pose_model_cfg, pose_model_weights)
 
-        # self.action_model = TSSTG(weight_file=args.action_weights)
-
-        # self.tracked_kpts = []
-
         dataset = builder.retrieve_dataset(cfg.DATASET.TRAIN)
         
         self.transformation = SimpleTransform(
@@ -122,6 +116,34 @@ class VideoInference():
                 train=False,
                 add_dpg=False
             )
+
+    def video_pipeline(self, source):
+        # video / webcam
+        cap = cv2.VideoCapture(source)
+        assert cap.isOpened(), f'Cannot open: {source}'
+
+        elapsed_times = []
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            start_time = perf_counter()
+            result = self.process_frame(frame)
+            pts = np.array([r.keypoints for r in result])
+            print(pts)
+
+            frame = self.draw_result(frame, result)
+                
+            elapsed_times.append(perf_counter() - start_time)
+            cv2.imshow('Pose', frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+        
+        print(f"Average time: {(1000 * np.sum(elapsed_times) / len(elapsed_times)):.2f} ms")
+
+        cap.release()
+        cv2.destroyAllWindows()
 
     def process_frame(self, frame, det_conf=0.4):
         results = self.detector.predict(
