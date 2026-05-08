@@ -5,9 +5,9 @@ import torch
 
 from ultralytics import YOLO
 from alphapose.models import builder
-from alphapose.utils.config import update_config
+from .required_modules.utils.config import update_config
 from .required_modules.simple_transform import SimpleTransform
-import alphapose.utils.transforms as t
+import scripts.required_modules.utils.transforms as t
 from time import perf_counter
 
 from dataclasses import dataclass
