@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 from ultralytics import YOLO
-from alphapose.models import builder
+from .required_modules.models import builder
 from .required_modules.utils.config import update_config
 from .required_modules.simple_transform import SimpleTransform
 import scripts.required_modules.utils.transforms as t
