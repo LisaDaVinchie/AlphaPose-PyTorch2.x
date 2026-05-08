@@ -6,7 +6,7 @@ import torch
 from ultralytics import YOLO
 from alphapose.models import builder
 from alphapose.utils.config import update_config
-from alphapose.utils.presets import SimpleTransform
+from .required_modules.simple_transform import SimpleTransform
 import alphapose.utils.transforms as t
 from time import perf_counter
 
