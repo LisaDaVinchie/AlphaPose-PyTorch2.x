@@ -7,7 +7,7 @@ from ultralytics import YOLO
 from .required_modules.models import builder
 from .required_modules.utils.config import update_config
 from .required_modules.simple_transform import SimpleTransform
-import scripts.required_modules.utils.transforms as t
+from .required_modules.utils.transforms import heatmap_to_coord_simple
 from time import perf_counter
 
 from dataclasses import dataclass
@@ -181,7 +181,7 @@ class VideoInference():
                 heatmap = self.pose_model(images.to(self.device)).cpu().numpy()   # (B, 17, hm_h, hm_w)
         
             for d, hm, bbox_r in zip(person_dets, heatmap, bboxes_resized):
-                preds, maxvals = t.heatmap_to_coord_simple(
+                preds, maxvals = heatmap_to_coord_simple(
                         hms=hm,
                         bbox = bbox_r
                     )
